@@ -1,0 +1,204 @@
+---
+title: 'Applied Statistical Modeling (SoSe 2021) -- Homework, Week 4'
+author: "Marc Blauert"
+date: "2021-05-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+library(tidyverse)
+library(rethinking)
+library(brms)
+```
+
+```{r, include=FALSE}
+theme_plots <- function(){
+  theme_classic()+
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 20, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+### Tasks:
+McElreath Chapter 4.7, Exercise 4E3, 4M1, and 4H2 (using brms instead of quap)
+
+### 4E3
+
+For the model below, write down the appropriate form of Bayes’ theorem that includes the proper likelihood and priors.
+
+Model:  
+$yi ∼ Normal(μ, σ)$  
+$μ ∼ Normal(0, 10)$  
+$σ ∼ Exponential(1)$  
+
+$$p(\mu,\sigma \mid y) = \frac{Normal(yi \mid \mu,\sigma) * Normal(\mu \mid 0,10) * Exponential(\sigma \mid 1)}{\int \int Normal (yi \mid \mu,\sigma)*Normal (\mu \mid 0,10)*Exponential(\sigma \mid 1)*d \mu * d \sigma}$$
+
+### 4M1
+
+For the model below, simulate observed y values from the prior (not the posterior).
+
+Model:  
+$yi ∼ Normal(μ, σ)$  
+$μ ∼ Normal(0, 10)$  
+$σ ∼ Exponential(1)$  
+
+```{r}
+draws <- 10000
+
+sample_mu <- rnorm(draws, 0, 10)
+sample_sigma <- rexp(draws, 1)
+prior_y <- rnorm(draws, sample_mu, sample_sigma)
+dens(prior_y, norm.comp=TRUE)
+```
+
+### 4H2 (with brms)
+
+Load the Howell1 data from the Rethinking-package and filter those observations with age <18yrs
+
+```{r}
+data(Howell1)
+
+d <- Howell1 %>%
+  filter(age<18) %>%
+  mutate(weight_c = weight - mean(weight)) # weight_c --> standardizing the weight variable around 0; 0 as the peak of the normal distribution
+
+# Some summary statistics on the data:
+
+str(d)
+
+summary(d$height)
+sd(d$height)
+
+summary(d$weight)
+```
+
+### Sub-task (a): Fit a linear regression to these data, using brms. Present and interpret the estimates. For every 10 units of increase in weight, how much taller does the model predict a child gets?
+
+Reminder for myself: The linear model models average height for people <18yrs old in the sample.
+
+```{r, results="hide"}
+fit1 <- 
+  brm(data = d, 
+      family = gaussian,
+      height ~ 1 + weight_c,
+      prior = c(prior(normal(100, 20), class = Intercept),# Prior altered to reflect the data for children
+                prior(lognormal(0, 1), class = b),
+                prior(uniform(0, 50), class = sigma)),
+      iter = 28000, warmup = 27000, chains = 4, cores = 4,
+      seed = 4,
+      file = "fits/fit1")
+
+fit2 <- 
+  brm(data = d, 
+      family = gaussian,
+      height ~ 1 + weight_c,
+      prior = c(prior(normal(100, 20), class = Intercept),# Prior altered to reflect the data for children
+                prior(lognormal(0, 1), class = b),
+                prior(cauchy(0, 1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 4,
+      file = "fits/fit2")
+```
+
+```{r}
+plot(fit1)
+
+posterior_summary(fit1)[1:3, ] %>% 
+  round(digits = 2)
+
+fit1$fit
+
+plot(fit2)
+
+posterior_summary(fit2)[1:3, ] %>% 
+  round(digits = 2)
+
+
+pairs(fit1)
+
+prior_summary(fit1)
+```
+
+Interpretation of the weight_c coefficient: For a 10 unit increase in weight (kg) we observe a 27.2 units increase (cm) in height.
+
+### Sub-task (b): Plot the raw data, with height on the vertical axis and weight on the horizontal axis. Superimpose the MAP regression line and 89% interval for the mean. Also superimpose the 89% interval for predicted heights.
+
+Regression intervals -- Plot with regression line and 89% interval for the mean:
+
+```{r}
+# Prepare plotting:
+
+summary(d$weight)
+
+weight_seq <- tibble(weight = 4:45) %>% 
+  mutate(weight_c = weight - mean(d$weight))
+
+mu_summary <-
+  fitted(fit1, 
+         newdata = weight_seq,
+         probs = c(.055, .945)) %>%
+  data.frame() %>%
+  bind_cols(weight_seq)
+
+head(mu_summary)
+
+# Plot:
+
+d %>%
+  ggplot(aes(x = weight, y = height)) +
+  geom_smooth(data = mu_summary,
+              aes(y = Estimate, ymin = Q5.5, ymax = Q94.5),
+              stat = "identity",
+              fill = "grey", color = "black", alpha = 0.7, size = 1/2) +
+  geom_point(color = 4, shape = 3, size = 1.5, alpha = 0.8) +
+  coord_cartesian(xlim = range(d$weight)) +
+  theme_plots()
+```
+
+Add prediction intervals -- Plot with 89% interval for PREDICTED heights:
+
+```{r}
+# Goal: Show simulated heights additional to the distributions of plausible average height as in previous plot
+# Note: Weight_seq and mu_summary can be re-used here; Yet, we need to use predict() for the predictions
+
+# Prepare plotting:
+pred_height <-
+  predict(fit1,
+          newdata = weight_seq,
+          probs = c(.055, .945)) %>%
+  data.frame() %>%
+  bind_cols(weight_seq)
+
+# Plot:
+
+d %>%
+  ggplot(aes(x = weight)) +
+  geom_ribbon(data = pred_height, 
+              aes(ymin = Q5.5, ymax = Q94.5),
+              fill = "grey83") +
+  geom_smooth(data = mu_summary,
+              aes(y = Estimate, ymin = Q5.5, ymax = Q94.5),
+              stat = "identity",
+              fill = "darkgrey", color = "black", alpha = 0.9, size = 1/2) +
+  geom_point(aes(y = height), color = 4, shape = 3, size = 1.5, alpha = 0.8) +
+  coord_cartesian(xlim = range(d$weight)) +
+  theme_plots()
+```
+
+### Sub-task (c): What aspects of the model fit concern you? Describe the kinds of assumptions you would change, if any, to improve the model. You don’t have to write any new code. Just explain what the model appears to be doing a bad job of, and what you hypothesize would be a better model.
+
+* The height of a child in the sample is modeled as a function of its weight. However, no other factor is included. In particular, the inclusion of age would improve the model predictions, since we essentially lump together all developmental stages of children with the simple filter smaller than 18.  
+* From the two scatter plots shown above, we can see that the linear fit does not really reflect the evolution of height as a function of weight. The relationship is more logarithmic, with height increasing less with higher weight. This may be better modeled by the additional consideration of a log term for weight (not sure about that).

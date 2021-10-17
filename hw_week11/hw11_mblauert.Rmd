@@ -1,0 +1,209 @@
+---
+title: 'Homework ASM (SoSe 2021) -- Week 11'
+author: "Marc Blauert"
+date: "2021-06-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(tidybayes)
+library(RColorBrewer)
+library(MASS)
+library(rethinking)
+```
+
+```{r, include=FALSE}
+theme_plots <- function(){
+  theme_bw() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+### Task: McElreath Ch. 12.6, Ex. 12H1/2
+
+In 2014, a paper was published that was entitled “Female hurricanes are deadlier than male hurricanes.” As the title suggests, the paper claimed that hurricanes with female names have caused greater loss of life, and the explanation given is that people unconsciously rate female hurricanes as less dangerous and so are less likely to evacuate. Statisticians severely criticized the paper after publication. Here, you’ll explore the complete data used in the paper and consider the hypothesis that hurricanes with female names are deadlier.
+
+
+### Ex. 12H1
+
+Focus on predicting deaths using femininity of each hurricane’s name. Fit and interpret the simplest possible model, a Poisson model of deaths using femininity as a predictor. Compare the model to an intercept-only Poisson model of deaths. How strong is the association between femininity of name and deaths? Which storms does the model fit (retrodict) well? Which storms does it fit poorly?
+
+##### Load and inspect the data
+
+```{r}
+data(Hurricanes, package = "rethinking")
+d <- Hurricanes
+rm(Hurricanes)
+
+# ?Hurricanes
+str(d)
+#summary(d$deaths)
+#summary(d$femininity)
+#hist(d$deaths, 100)
+```
+
+##### Fit the two simple Poisson models
+
+```{r}
+# First the model using femininity as a predictor
+poisson_fem <-
+  brm(data = d,
+      family = poisson(link = "log"),
+      formula = deaths ~ 1 + femininity,
+      prior = c(prior(normal(3, 0.5), class = Intercept), # Priors are taken from the book example on Poisson regressions in Ch. 11/2
+                prior(normal(0, 0.2), class = b)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = T,
+      file = "fits/poisson_fem")
+
+# And second the model with no predictor and only the intercept
+poisson_int <-
+  brm(data = d,
+      family = poisson(link = "log"),
+      formula = deaths ~ 1,
+      prior = prior(normal(3, 0.5), class = Intercept),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = T,
+      file = "fits/poisson_int")
+
+summary(poisson_fem)
+
+summary(poisson_int)
+```
+
+##### Model comparison
+
+```{r}
+poisson_fem <- add_criterion(poisson_fem, c("loo", "waic"))
+poisson_int <- add_criterion(poisson_int, c("loo", "waic"))
+
+# Comparison using WAIC
+loo_compare(poisson_fem, poisson_int, criterion = "waic") %>% print(simplify = T)
+
+# Comparison using LOO
+loo_compare(poisson_fem, poisson_int, criterion = "loo") %>% print(simplify = T)
+```
+
+Essentially, the results from the model comparison tell us that there is no relevant difference in predictive performance between the two models. The WAIC or LOO based estimates in `elpd_diff` between the two models are exceeded by the `se_diff` by about 3-4 times, indicating that there is a large overlap. Thus, the `poisson_fem` has no better predictive power than the intercept only model `poisson_int`.
+
+##### The effect of femininity of name on the number of deaths
+
+```{r}
+poisson_fem_post_exp <- posterior_samples(poisson_fem) %>% exp()
+
+summary(poisson_fem_post_exp$b_femininity)
+
+ggplot(data = poisson_fem_post_exp, aes(x = b_femininity)) +
+  geom_histogram(fill = "#2ca25f", alpha = 0.5, color = "white") +
+  theme_plots() +
+  scale_x_continuous(breaks = seq(1, 1.2, 0.01)) +
+  labs(x = "exp(b_femininity) - Estimated effect per unit, linear scale", y = "Counts", title = "Histogram of posterior samples of exp(b_femininity) on the number of deaths")
+```
+
+That `exp(b_femininity)` is above 1 indicates that for every unit of femininity the number of deaths increase.
+
+##### Investigate which storms the model fits well and which storms it does fit poorly
+
+```{r}
+summary(d$femininity)
+seq <- seq(0, 10.5, length.out = 500)
+
+fitted_poisson_fem <- cbind(seq, fitted(poisson_fem,
+                              newdata = data.frame(femininity=seq),
+                              probs = c(.025,.975)) %>% 
+  data.frame())
+
+#head(fitted_poisson_fem, 5)
+
+ggplot(data = fitted_poisson_fem, aes(x = seq)) +
+  geom_smooth(aes(y = Estimate, ymin = Q2.5, ymax = Q97.5),
+              stat = "identity",
+              fill = "grey", color = "black", alpha = 0.7, size = 1/2) +
+  geom_point(data = d,
+             aes(x = femininity, y = deaths),
+             color = "#2ca25f", shape = 6, size = 2, alpha = 0.5) +
+  theme_plots() +
+  labs(x = "Femininity", y = "Estimate for deaths", title = "Scatterplot femininity against deaths with model predictions")
+```
+
+The scatterplot above plots femininity against the number of deaths and shows the estimated regression line for `b_femininity` from the `poisson_fem` model with the 95% interval for the mean. The interval is barely noticeable since it is so narrow around the estimated regression line. The plot clearly shows that the regression describes the data very poorly. Since almost none of the data points are near the estimated regression line, it must be concluded that the model does not fit any storms well. Most observations with few fatalities are clustered below the regression line. Some extreme storms with many deaths are well above the line.
+
+
+### Ex. 12H2 (Negative binomial or Gamma-Poisson model)
+
+Counts are nearly always over-dispersed relative to Poisson. So fit a gamma-Poisson (aka negative-binomial) model to predict deaths using femininity. Show that the over-dispersed model no longer shows as precise a positive association between femininity and deaths, with an 89% (95%) interval that overlaps zero. Can you explain why the association diminished in strength?
+
+##### Fit the Gamma-Poisson model
+
+```{r}
+gamma_poisson_fem <-
+  brm(data = d,
+      family = negbinomial,
+      formula = deaths ~ 1 + femininity,
+      prior = c(prior(normal(3, 0.5), class = Intercept), # Priors are taken from the book example on Poisson regressions in Ch. 11/2
+                prior(normal(0, 0.2), class = b),
+                prior(gamma(0.01, 0.01), class = shape)), # same as in b12.2a in the brms bookdownn
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = T,
+      file = "fits/gamma_poisson_fem")
+
+summary(gamma_poisson_fem)
+```
+
+The results for `b_femininity` now overlap with zero
+
+##### Re-estimate the effect of femininity of name on the number of deaths
+
+```{r}
+gamma_poisson_fem_post_exp <- posterior_samples(gamma_poisson_fem) %>% exp()
+
+summary(gamma_poisson_fem_post_exp$b_femininity)
+
+ggplot(data = gamma_poisson_fem_post_exp, aes(x = b_femininity)) +
+  geom_histogram(fill = "#2ca25f", alpha = 0.5, color = "white") +
+  theme_plots() +
+  scale_x_continuous(breaks = seq(0.8, 1.2, 0.05)) +
+  labs(x = "exp(b_femininity) - Estimated effect per unit, linear scale", y = "Counts", title = "Histogram of posterior samples of exp(b_femininity) on the number of deaths")
+```
+
+The re-estimated histogram shows how the estimation of the Gamma-Poisson distribution differs from the Poisson distribution. By allowing more variance, two effects occur. First, the estimates are now more widely spread than in the Poisson distribution. Second, the wider range of estimates also extends below 1 (on the linear scale, which is equivalent to below 0 on the log() scale). This suggests that the effect of femininity on deaths is no longer conclusive. While in some cases a more feminine name may be associated with more deaths, it could also be that in another it is associated with fewer deaths.
+
+##### Re-create scatterplot to investigate fit with the data
+
+```{r}
+fitted_gamma_poisson_fem <- cbind(seq, fitted(gamma_poisson_fem,
+                              newdata = data.frame(femininity=seq),
+                              probs = c(.025,.975)) %>% 
+  data.frame())
+
+#head(fitted_poisson_fem, 5)
+
+ggplot(data = fitted_gamma_poisson_fem, aes(x = seq)) +
+  geom_smooth(aes(y = Estimate, ymin = Q2.5, ymax = Q97.5),
+              stat = "identity",
+              fill = "grey", color = "black", alpha = 0.7, size = 1/2) +
+  geom_point(data = d,
+             aes(x = femininity, y = deaths),
+             color = "#2ca25f", shape = 6, size = 2, alpha = 0.5) +
+  theme_plots() +
+  labs(x = "Femininity", y = "Estimate for deaths", title = "Scatterplot femininity against deaths with model predictions")
+```
+
+Those two effects are also reflected in the re-estimated scatterplot for the gamma-Poisson model above.

@@ -1,0 +1,141 @@
+---
+title: 'Homework ASM (SoSe 2021) -- Week 8'
+author: "Marc Blauert"
+date: "2021-06-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(tidybayes)
+library(rcartocolor)
+```
+
+```{r, include=FALSE}
+theme_plots <- function(){
+  theme_void() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+### Tasks: McElreath Ch. 8.5, Ex. 8H1/8H2
+
+#### Task 1: Ex. 8H1:
+
+Return to the data(tulips) example in the chapter (8). Now include the bed variable as a predictor in the interaction model. Don’t interact bed with the other predictors; just include it as a main effect. Note that bed is categorical. So to use it properly, you will need to either construct dummy variables or rather an index variable, as explained in Chapter 5.
+
+##### Load data
+
+```{r}
+data(tulips, package = "rethinking")
+d <- tulips
+
+rm(tulips)
+```
+
+##### Wrangle with data
+
+```{r}
+d <-
+  d %>% 
+  mutate(blooms_std = blooms / max(blooms),
+         water_cent = water - mean(water),
+         shade_cent = shade - mean(shade),
+         bed = factor(bed))
+
+levels(d$bed) <- c("A", "B", "C")
+
+str(d)
+```
+
+##### Estimate the interaction model from Chapter 8 with the addtional categorical variable `bed`
+
+Model equation:   
+
+\begin{align*}
+\text{blooms_std}_i & \sim \operatorname{Normal}(\mu_i, \sigma) \\
+\mu_i   & = \alpha + \beta_1 \text{water_cent}_i + \beta_2 \text{shade_cent}_i + \beta_3 \text{shade_cent}_i \cdot \text{water_cent}_i + \beta_4 \text{bed}_i\\
+\alpha  & \sim \operatorname{Normal}(0.5, 0.25) \\
+\beta_1 & \sim \operatorname{Normal}(0, 0.25) \\
+\beta_2 & \sim \operatorname{Normal}(0, 0.25) \\
+\beta_3 & \sim \operatorname{Normal}(0, 0.25) \\
+\beta_4 & \sim \operatorname{Normal}(0, 0.25) \\
+\sigma  & \sim \operatorname{Exponential}(1) \\
+\end{align*}
+
+```{r}
+b8.5_bed <-
+  brm(data = d, 
+      family = gaussian,
+      blooms_std ~ 1 + water_cent + shade_cent + water_cent:shade_cent + bed,
+      prior = c(prior(normal(0.5, 0.25), class = Intercept),
+                prior(normal(0, 0.25), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 8,
+      file = "fits/b08.05_bed")
+
+#plot(b8.5_bed)
+
+print(b8.5_bed)
+
+
+color_scheme_set("viridisA")
+mcmc_plot(b8.5_bed, type = "areas", prob = 0.5, prob_outer = 0.97)
+```
+
+##### Interpretation of model results for `bed` categories
+
+From the model results and the corresponding coefficient plot, it appears that beds B and C have a higher proportion of flowers than the reference category, bed A, when water and shade conditions and their interaction are considered. This may indicate that other growing conditions beyond water and shade, which are not accounted for in the model, are systematically better in beds B and C than in bed A. Such growing conditions may be soil composition or temperature.
+
+#### Task 2: Ex. 8H2:
+
+Use WAIC to compare the model from 8H1 to a model that omits bed. What do you infer from this comparison? Can you reconcile the WAIC results with the posterior distribution of the bed coefficients?
+
+##### Re-estimate the interaction model (this time NO additional categorical `bed` variable)
+
+```{r}
+b8.5 <-
+  brm(data = d, 
+      family = gaussian,
+      blooms_std ~ 1 + water_cent + shade_cent + water_cent:shade_cent,
+      prior = c(prior(normal(0.5, 0.25), class = Intercept),
+                prior(normal(0, 0.25), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 8,
+      file = "fits/b08.05")
+
+print(b8.5)
+```
+
+##### Model comparison
+
+```{r}
+b8.5 <- add_criterion(b8.5, c("loo", "waic"))
+b8.5_bed <- add_criterion(b8.5_bed, c("loo", "waic"))
+
+loo_compare(b8.5, b8.5_bed, criterion = "waic") %>% print(simplify = F)
+model_weights(b8.5, b8.5_bed, weights = "waic") %>% round(digits = 3)
+```
+
+The `loo_compare` and the `model_weights` functions used with the `waic` criterion indicate that the model which includes the categorical `bed` variable performs slightly better than the one without. Yet, the `elpd_diff` is lower than the `se_diff` which leads to an ambiguous outcome for this comparison of model fit.
+
+What surprises me is that the difference between reference bed A and the other two beds (B and C) seems to be quite strong (see the coefficient plot above), but the model performs only slightly better. Intuitively, I would have expected a stronger difference in model fit in favor of `b8.5_bed`. Is it perhaps because many of the posterior distributions (all except `shade_cent`and the interaction term) cluster in the same area?
+

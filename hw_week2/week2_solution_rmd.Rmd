@@ -1,0 +1,187 @@
+---
+title: "ASM - Exercise week 2"
+author: "Kin Tak Wong, Anne-Kathleen Malchow & Tobias Krüger"
+date: "April 2, 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "D:/seadrive_root/Prof. Dr/My Libraries/WORK/Teaching/HU/Kurse/Applied_statistical_modelling/SoSe2021")
+```
+
+# 2M1
+## (1)
+```{r}
+# define grid
+res = 1000
+p_grid <- seq( from=0 , to=1 , length.out=res )
+# define prior
+prior <- rep( 1 , res )
+# compute likelihood at each value in grid
+likelihood <- dbinom( 3 , size=3 , prob=p_grid )
+# compute product of likelihood and prior
+unstd.posterior <- likelihood * prior
+# standardize the posterior, so it sums to 1
+posterior <- unstd.posterior / sum(unstd.posterior)
+# plot
+plot( p_grid , posterior , type="b" ,
+      xlab="probability of water" , ylab="posterior probability" )
+```
+
+## (2)
+```{r}
+likelihood <- dbinom( 3 , size=4 , prob=p_grid )
+unstd.posterior <- likelihood * prior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot( p_grid , posterior , type="b" ,
+      xlab="probability of water" , ylab="posterior probability" )
+```
+
+## (3)
+```{r}
+likelihood <- dbinom( 5 , size=7 , prob=p_grid )
+unstd.posterior <- likelihood * prior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot( p_grid , posterior , type="b" ,
+      xlab="probability of water" , ylab="posterior probability" )
+```
+
+# 2M2
+## new prior
+```{r}
+prior <- ifelse( p_grid < 0.5 , 0 , 1 )
+```
+
+## (1)
+```{r}
+likelihood <- dbinom( 3 , size=3 , prob=p_grid )
+unstd.posterior <- likelihood * prior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot( p_grid , posterior , type="b" ,
+      xlab="probability of water" , ylab="posterior probability" )
+```
+
+## (2)
+```{r}
+likelihood <- dbinom( 3 , size=4 , prob=p_grid )
+unstd.posterior <- likelihood * prior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot( p_grid , posterior , type="b" ,
+      xlab="probability of water" , ylab="posterior probability" )
+```
+
+## (3)
+```{r}
+likelihood <- dbinom( 5 , size=7 , prob=p_grid )
+unstd.posterior <- likelihood * prior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot( p_grid , posterior , type="b" ,
+      xlab="probability of water" , ylab="posterior probability" )
+```
+
+# 2M3 
+```{r}
+p_earth <- p_mars <- .5
+p_waterIearth <- .7
+p_landImars <- 1
+
+p_landIearth <- 1 - p_waterIearth
+p_land <- p_landIearth*p_earth + p_landImars*p_mars
+
+(p_earthIland <- p_landIearth*p_earth/p_land)
+```
+
+# 2M4
+We have three cards and name them B/B, B/W and W/W. The number of ways each card can produce the observed data (black side facing up) is:
+
+- B/B: 2
+- B/W: 1
+- W/W: 0
+
+Only B/B can produce the second black side, so the
+probability that the other side is also black is: $\frac{2}{1+2}=\frac{2}{3}$
+
+# 2M5
+
+- B/B: 2
+- B/B: 2
+- B/W: 1
+- W/W: 0
+
+Probability: $\frac{2+2}{1+2+2}=\frac{4}{5}=0.8$
+
+# 2M6
+
+- B/B: 2x1
+- B/W: 1x2
+- W/W: 0x3
+
+Probability: $\frac{2}{2+2}=\frac{2}{4}=0.5$
+
+# 2M7
+If the first card is B/B, then we have 6 ways to produce the observed data:
+
+- B1/B2 & W1/W2
+- B1/B2 & W2/W1
+- B2/B1 & W1/W2
+- B2/B1 & W2/W1
+- B1/B2 & B/W
+- B2/B1 & B/W
+
+If the first card is B/W, then we have 2 ways to produce the observed data:
+
+- B/W & W1/W2
+- B/W & W2/W1
+
+If the first card is W/W, then we have 0 ways to produce the observed data. Therefore, the probability that the first card is B/B based on the observed data is: $\frac{6}{6+2}=\frac{3}{4}=0.75$
+
+# 2H1
+Let's define $\Pr(A)$ as the probability of species $A$ and $\Pr(T)$ as the probability of getting twins. Based on the observed data, we can calculate the posterior probability of species $A$ via Bayes rule:
+
+$$\Pr(A|T)=\frac{\Pr(T|A)\cdot\Pr(A)}{\Pr(T)}$$
+
+We know:
+
+- $\Pr(A)=0.5$
+- $\Pr(T|A)=0.1$
+- $\Pr(T)=\Pr(T|A)\cdot\Pr(A)+\Pr(T|B)\cdot\Pr(B)=0.1\cdot 0.5+0.2\cdot 0.5=0.15$
+
+Therefore:
+
+$$\Pr(A|T)=\frac{1}{3}:=\Pr'(A)$$
+$$\Pr'(B)=1-\Pr'(A)=\frac{2}{3}$$
+
+Based on these updated probabilities of the two species, we can calculate the probability that the next birth is also twins:
+
+$$\Pr'(T)=\Pr(T|A)\cdot \Pr'(A)+\Pr(T|B)\cdot \Pr'(B)=0.1\cdot \frac{1}{3}+0.2\cdot \frac{2}{3}=\frac{1}{6}$$
+
+# 2H2
+
+See 2H1: $\Pr(A|T)=\frac{1}{3}$
+
+# 2H3
+
+We can apply Bayes rule again, using the updated prior from 2H1-2:
+
+$$\Pr(A|S)=\frac{\Pr(S|A)\cdot\Pr'(A)}{\Pr(S)}$$
+$$\Pr(A|S)=\frac{0.9\cdot\frac{1}{3}}{0.9\cdot\frac{1}{3}+0.8\cdot\frac{2}{3}}=\frac{9}{25}=0.36:=\Pr''(A)$$
+
+# 2H4
+
+Let's define $\Pr(+)$ as the probability that the test identifies the species as A. Then Bayes rule, ignoring the birth data, yields:
+
+$$\Pr(A|+)=\frac{\Pr(+|A)\cdot\Pr(A)}{\Pr(+)}$$
+$$\Pr(A|+)=\frac{0.8\cdot0.5}{0.8\cdot0.5+0.35\cdot0.5}=0.7$$
+
+Redoing the calculation with the updated prior from 2H3 (after the birth data) yields:
+
+$$\Pr(A|+)=\frac{\Pr(+|A)\cdot\Pr''(A)}{\Pr(+)}$$
+$$\Pr(A|+)=\frac{0.8\cdot0.36}{0.8\cdot0.36+0.35\cdot0.64}=0.56$$
+
+Note, another interpretation might be to redo 2H1 (probability of the 2nd birth being also a twin) with the added information from the test.

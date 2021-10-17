@@ -1,0 +1,204 @@
+---
+title: 'Homework ASM (SoSe 2021) -- Week 10'
+author: "Marc Blauert"
+date: "2021-06-17"
+output: 
+  html_document:
+    theme: readable
+    highlight: haddock
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+      
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(tidybayes)
+library(rcartocolor)
+library(MASS)
+# library(shinystan)
+```
+
+```{r, include=FALSE}
+theme_plots <- function(){
+  theme_bw() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+**Task: McElreath Ch. 11.5, Ex. 11H2**
+
+# Part A
+
+## Load data
+
+```{r}
+data(eagles, package = "MASS")
+d <- eagles
+rm(eagles)
+
+str(eagles)
+```
+
+## Model equation
+
+\begin{align*}
+y_i & \sim \operatorname{Binomial}(n_i, p_i) \\
+Logit(p_i) & = \alpha + \beta_P P_i + \beta_V V_i + \beta_A A_i \\
+\alpha  & \sim \operatorname{Normal}(0, 1.5) \\
+\beta_P, \beta_V, \beta_A & \sim \operatorname{Normal}(0, 0.5) \\
+\end{align*}
+
+Where `y` is the number of successful attempts, `n` is the total number of attempts, `P` indicates if the pirate-eagle had a large body (dummy), `V` indicates if the victim-eagle had a large body (dummy), `A` indicates if the pirate-eagle was an adult (dummy).
+
+## Create dummy variables from categorical variables to use indicator approach
+
+```{r}
+d <- d %>% 
+  mutate(P = ifelse(P == "L", 1, 0),
+         V = ifelse(V == "L", 1, 0),
+         A = ifelse(A == "A", 1, 0))
+```
+
+
+## Fit the model
+```{r}
+eagle_fit <- 
+  brm(data = d,
+      family = binomial(link = "logit"),
+      formula = y | trials(n) ~ 0 + P + V + A,
+      prior = prior(normal(0, 5), class = b),
+      chains = 4, 
+      cores = 4,
+      sample_prior = T,
+      file = "fits/eagle_fit")
+
+eagle_fit_w_intercept <- 
+  brm(data = d,
+      family = binomial(link = "logit"),
+      formula = y | trials(n) ~ 1 + P + V + A,
+      prior = c(prior(normal(0, 10), class = Intercept),
+                prior(normal(0, 5), class = b)),
+      chains = 4, 
+      cores = 4,
+      sample_prior = T,
+      file = "fits/eagle_fit_w_intercept")
+
+#plot(eagle_fit)
+summary(eagle_fit)
+
+#plot(eagle_fit_w_intercept)
+summary(eagle_fit_w_intercept)
+
+# launch_shinystan(eagle_fit)
+```
+
+# Part B
+
+## Interpret the results
+
+Above I have estimated two models. Both use the indicator approach. However, they differ in that I specify one with intercept and one without. The results are found to be relatively comparable to each other. In the following I will use the `eagle_fit` model without the intercept, since personally I find its specification a little more intuitive.
+
+What remains to be checked is the effect of the weakly informed, flat prior which I have chosen in the specification above. Do investigate the trends in the outcome scale I use `prior samples`:
+
+```{r}
+prior_samples(eagle_fit) %>% 
+  mutate(p = inv_logit_scaled(b)) %>% 
+  
+  ggplot(aes(x = p)) +
+  geom_density(fill = "#2ca25f", 
+               alpha = 0.5, 
+               size = 0, adjust = 0.1) +
+  labs(x ="Prior probability", y = "Density estimate") +
+  theme_plots()
+```
+
+The density estimates cluster around 0 and 1. If I understand McElreath (p. 328) correctly, this suggests that the model assumes that the presence (absence) of a condition almost always leads to a successful attempt (unsuccessful attempt). In most cases, the use of such a prior is unreasonable. However, looking at the aggregate count data, this assumption seems sensible in the given case. Only in the combinations of conditions (configurations) where opposite effects apply (e.g., in (3) the pirates have large bodies, but the victims also have large bodies) we find a mixture of successful and unsuccessful attempts. Otherwise, the count data shows almost always only successful or unsuccessful attempts for a configuration. 
+
+I continue with the interpretation of the coefficients from the `eagle_fit` model:
+
+```{r}
+fixef(eagle_fit)
+```
+
+Having a large body as a pirate eagle clearly leads to a higher success rate. In the reverse case, when victim eagles have a large body, they are less likely to be successfully attacked by a pirate eagle. Finally, adult pirate eagles have a higher chance of success than their not-yet-adult peers.
+
+## Show predicted probability of success and its 89% interval
+
+```{r}
+prob_log_odds <- fitted(eagle_fit, probs = c(0.055,0.945), scale = "linear") %>% 
+  inv_logit_scaled() %>% 
+  as.data.frame() # http://paul-buerkner.github.io/brms/reference/fitted.brmsfit.html
+
+prob_log_odds # Configuration (8) is only a point; something appears to be wrong here. Maybe that there are too few n (only 4)?
+
+ggplot(data = prob_log_odds) +
+  geom_pointrange(aes(y = 1:8, x = Estimate, xmin = Q5.5, xmax = Q94.5), color = "#2ca25f", alpha = 0.5) +
+  theme_plots() +
+  labs(x = "Estimated probability", y = "Configuration (combination of conditions)", title = "Probability of a successful attempt") +
+  scale_y_continuous(breaks = seq(1, 8, 1))
+
+```
+
+## Show predicted success count and its 89% interval
+
+```{r}
+prob_log_count <- prob_log_odds * d$n # here I was not sure if one can simply multiply the probability with the n counts in the original data
+
+successes_i <- predict(eagle_fit, probs = c(0.055,0.945))
+
+ggplot(data = prob_log_count) +
+  geom_pointrange(aes(y = 1:8, x = Estimate, xmin = Q5.5, xmax = Q94.5), color = "#2ca25f", alpha = 0.5) +
+  theme_plots() +
+  labs(y = "Configuration (combination of conditions)", x = "Estimated count", title = "Number of predicted successful attempts (counts)") +
+  scale_y_continuous(breaks = seq(1, 8, 1))
+```
+
+# Part C
+
+## Model comparison with interaction between pirate size (P) and pirate age (A) included
+
+I use the `eagle_fit` model and add the interaction term in the end:
+
+```{r}
+eagle_fit_int <- 
+  brm(data = d,
+      family = binomial(link = "logit"),
+      formula = y | trials(n) ~ 0 + P + V + A + P:A,
+      prior = prior(normal(0, 5), class = b),
+      chains = 4, 
+      cores = 4,
+      sample_prior = T,
+      file = "fits/eagle_fit_int")
+
+summary(eagle_fit_int)
+```
+
+```{r}
+eagle_fit <- add_criterion(eagle_fit, c("loo", "waic"))
+eagle_fit_int <- add_criterion(eagle_fit_int, c("loo", "waic"))
+
+loo_compare(eagle_fit, eagle_fit_int, criterion = "loo") %>% print(simplify = F) # WAIC produces warning messages, therefore I use loo for the model comparison instead
+model_weights(eagle_fit, eagle_fit_int, weights = "loo") %>% round(digits = 3)
+```
+
+The model with the interaction term appears to have the better model fit. The difference in `elpd_diff` exceeds the difference in the standard error of the model with no interaction term which is a good indication that the better fit is robust. The better fit is also reflected in the model weights.

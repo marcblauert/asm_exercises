@@ -1,0 +1,245 @@
+---
+title: 'Applied Statistical Modeling (SoSe 2021) -- Homework, Week 2 '
+author: "Marc Blauert"
+date: "4/22/2021"
+output:
+  html_document: default
+  pdf_document: default
+bibliography: test-bib.bib
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+  rm(list = ls())
+  setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+  
+  library(tidyverse)
+```
+
+Tasks: McElreath chapter 2.6, exercises 2M(1-7), extra: 2H(1-4)
+
+### Task 2M1 -- Grid Approximation with Globe Tossing Model
+
+```{r, include=TRUE}
+# Step 1: Define grid
+p_grid <- seq(from = 0, to = 1, length.out = 100)
+# Step 2: Define prior (Assumption: Uniform distribution)
+prior <- rep(1 ,100)
+```
+
+First set of observations: W W W (3/3)
+
+```{r, include=TRUE}
+# Step 3: Compute likelihood at each value in grid
+likelihood <- dbinom(3, size=3, prob=p_grid)
+# Step 4: Multiply prior with likelihood to get unstandardized posterior
+unstd.posterior <- likelihood * prior
+# Step 5: Standardize the posterior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot(p_grid, posterior, type="b" ,
+      xlab="probability of water", ylab="posterior probability")
+```
+
+Second set of observations: W W W L (3/4)
+
+```{r, include=TRUE}
+# Step 3: Compute likelihood at each value in grid
+likelihood <- dbinom(3, size=4, prob=p_grid)
+# Step 4: Multiply prior with likelihood to get unstandardized posterior
+unstd.posterior <- likelihood * prior
+# Step 5: Standardize the posterior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot(p_grid, posterior, type="b" ,
+      xlab="probability of water", ylab="posterior probability")
+```
+
+Thrid set of observations: L W W L W W W (5/7)
+
+```{r, include=TRUE}
+# Step 3: Compute likelihood at each value in grid
+likelihood <- dbinom(5, size=7, prob=p_grid)
+# Step 4: Multiply prior with likelihood to get unstandardized posterior
+unstd.posterior <- likelihood * prior
+# Step 5: Standardize the posterior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot(p_grid, posterior, type="b" ,
+      xlab="probability of water", ylab="posterior probability")
+```
+
+### Task 2M2 -- Adjust Globe Tossing Model with binary prior shifting at the value of 0.5
+
+First, adjust the prior:
+
+```{r, include=TRUE}
+# Step 2: Define prior (Assumption: Uniform distribution)
+prior <- ifelse(p_grid < 0.5, 0, 1)
+```
+
+Now, re-run with adjusted prior:
+
+First set of observations: W W W (3/3)
+
+```{r, include=TRUE}
+# Step 3: Compute likelihood at each value in grid
+likelihood <- dbinom(3, size=3, prob=p_grid)
+# Step 4: Multiply prior with likelihood to get unstandardized posterior
+unstd.posterior <- likelihood * prior
+# Step 5: Standardize the posterior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot(p_grid, posterior, type="b" ,
+      xlab="probability of water", ylab="posterior probability")
+```
+
+Second set of observations: W W W L (3/4)
+
+```{r, include=TRUE}
+# Step 3: Compute likelihood at each value in grid
+likelihood <- dbinom(3, size=4, prob=p_grid)
+# Step 4: Multiply prior with likelihood to get unstandardized posterior
+unstd.posterior <- likelihood * prior
+# Step 5: Standardize the posterior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot(p_grid, posterior, type="b" ,
+      xlab="probability of water", ylab="posterior probability")
+```
+
+Thrid set of observations: L W W L W W W (5/7)
+
+```{r, include=TRUE}
+# Step 3: Compute likelihood at each value in grid
+likelihood <- dbinom(5, size=7, prob=p_grid)
+# Step 4: Multiply prior with likelihood to get unstandardized posterior
+unstd.posterior <- likelihood * prior
+# Step 5: Standardize the posterior
+posterior <- unstd.posterior / sum(unstd.posterior)
+
+plot(p_grid, posterior, type="b" ,
+      xlab="probability of water", ylab="posterior probability")
+```
+
+### Task 2M3 -- Tossing of Earth and Mars
+
+First, the information from the text is stored in probabilities:
+
+```{r, include=TRUE}
+prob_earth_water <- 0.7 # Earth covered with 70% water
+prob_earth_land <- 1-prob_earth_water # Land conditional on water
+
+prob_mars_land <- 1 # Not much water on Mars
+
+prob_earth <- 0.5 # Both planets equally likely to be tossed
+prob_mars <- 1-prob_earth
+```
+
+Now, this information can be used to compute the posterior probability
+that the globe was the Earth, conditional on seeing land
+(Pr(Earth\|land)) and that it is equal to 0.23:
+
+```{r, include=TRUE}
+prob_land <- prob_earth_land*prob_earth + prob_mars_land*prob_mars; prob_land
+prob_land_earth <- (prob_earth_land*prob_earth)/prob_land; prob_land_earth
+```
+
+### Task 2M4 -- Three black and white cards
+
+A deck involves three cards with the following properties: Card 1:
+Black/Black Card 2: Black/White Card 3: White/White
+
+One card is randomly chosen and put on the table. The upper side is
+black, now show that the probability that the other side is also black
+is 2/3:
+
+```{r, include=TRUE}
+d <- tibble(front = c(0, 0, 1),
+            back = c(0, 1, 1))
+
+d %>% mutate(first_black= front+back) %>% 
+      mutate(prob = first_black/(sum(first_black)))
+```
+
+### Task 2M5 -- Now four cards
+
+The deck from the previous task is supplemented by another Black/Black
+card. Therefore the overall deck is:
+
+Card 1: Black/Black Card 2: Black/White Card 3: White/White Card 4:
+Black/Black
+
+```{r, include=TRUE}
+d <- tibble(front = c(0, 0, 1, 1),
+            back = c(0, 1, 1, 1))
+
+d %>% mutate(first_black= front+back) %>% 
+      mutate(prob = first_black/(sum(first_black)))
+```
+
+When adding up the probabilities where the first side is black (lines 3
+and 4) we arrive at a probability of 0.8 (0.4 + 0.4) that the other side
+is black as well.
+
+### Task 2M6 -- Unequal probabilities to draw black
+
+Now, the deck from task 2M4 is used again but this time the
+probabilities to draw a card depend on the color since the ink makes the
+cards with black sides heavier:
+
+Card 1: Black/Black Card 2: Black/White Card 3: White/White
+
+For every way to pull the Black/Black card from the bag, there are 2
+ways to pull the Black/White card and 3 ways to pull the White/White
+card.
+
+```{r, include=TRUE}
+d <- tibble(front = c(0, 0, 1),
+            back = c(0, 1, 1),
+            weight = c(3, 2, 1))
+
+d %>% mutate(first_black= front+back) %>% 
+      mutate(prob = first_black*weight/(sum(first_black*weight)))
+```
+
+From the table it can be seen that if the front is black, then the
+probability with the adjusted weight of also having black on the back
+drops to 0.5.
+
+### Task 2M7 -- Three black and white cards, again, but different setting
+
+Deck: Card 1: Black/Black Card 2: Black/White Card 3: White/White
+
+Setting: A first card is drawn from the deck and is black in the front.
+Now a second card is drawn and the front is white. In this setting, what
+is the probability that the backside of the first card is also black?
+
+```{r, include=TRUE}
+card <- c("Black/Black", "Black/White", "White/White")
+prior <- 1
+ways <- c(6, 2, 0)
+likelihood <- ways * prior
+prob <- likelihood / sum(likelihood); prob
+```
+
+Note: The code above doesn't automatically produces the results but
+builds on the logically derived, hard-coded "ways" vector.
+
+First card: Black/Black (2) --\> Second card: Black/White or White/White
+(3) --\> there are 6 (2 \* 3) possible ways to produce the observed
+outcome First card: Black/White (1) --\> Second card: Black/Black or
+White/White (2) --\> there are 2 (1 \* 2) possible ways to produce the
+observed outcome First card: White/White (0) --\> No way to produce the
+observed outcome
+
+Test citations:
+
+[@zahran_vulnerability_2008]
+Rosenzweig [-@rosenzweig_cities_2010]

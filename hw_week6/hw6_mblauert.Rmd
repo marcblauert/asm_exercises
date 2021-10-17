@@ -1,0 +1,330 @@
+---
+title: 'Homework ASM (SoSe 2021) -- Week 6'
+author: "Marc Blauert"
+date: "2021-05-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(ggdag)
+library(bayesplot)
+library(tidybayes)
+```
+
+```{r, include=FALSE}
+theme_plots <- function(){
+  theme_classic()+
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+#### Tasks description (McElreath Ch. 5.5, Ex. 5H4, using brms)
+
+Here is an open practice problem to engage your imagination. In the divorce data, States in the southern United States have many of the highest divorce rates. Add the South indicator variable to the analysis. First, draw one or more DAGs that represent your ideas for how Southern American culture might influence any of the other three variables (D, M or A). Then list the testable implications of your DAGs, if there are any, and fit one or more models to evaluate the implications. What do you think the influence of “Southerness” is?
+
+### Part 1: Data wrangling
+
+First, I load the data. To prepare it for the analysis, I fist standardize the variables on divorce rate, marriage rate and median age of marriage as it was done in the book chapter example. Furthermore, I also create an index variable for state type either being a Southern state or a non-Southern state.
+
+```{r}
+# Loading the data:
+data(WaffleDivorce, package = "rethinking")
+d <- WaffleDivorce
+rm(WaffleDivorce)
+
+# Standardizing the variables for divorce rate (D), marriage rate (M), and median age at marriage (A):
+d <-
+  d %>% 
+  mutate(D = (Divorce - mean(Divorce)) / sd(Divorce)) %>% 
+  mutate(M = (Marriage - mean(Marriage)) / sd(Marriage)) %>% 
+  mutate(A = (MedianAgeMarriage - mean(MedianAgeMarriage)) / sd(MedianAgeMarriage))
+
+# Creating a index variable for state type (S):
+d <-
+  d %>% 
+  mutate(S = ifelse(South == 1, 2, 1)) %>% 
+  mutate(S = factor(S))
+
+levels(d$S) <- c("Non-Southern state", "Southern state")
+
+str(d)
+
+# Get some first summary statistics grouped by state type (S):
+d %>% 
+  group_by(S) %>% 
+  summarise(avg_D = mean(D), avg_M = mean(M), avg_A = mean(A))
+```
+
+### Part 2: Collecting ideas and drawing of DAG
+
+Having prepared the data, I turn to developing an idea of how the inclusion of the index variable S = Southern (or non-Southern) state might affect the other variables in the model (D = divorce rate, M = marriage rate, and A = median age at marriage). 
+
+Here, I turn to the role of religious beliefs in Southern states across the different ethnic groups. In general, we know that Southern states are deeply religious. Much more so than the other non-Southern states of the United States. Commonly, large areas of the Southern states are also referred to as the "Bible Belt," reflecting the deeply rooted role of the Baptist and Catholic faiths in this region. Given this knowledge of the important role of the Christian religion, I assume the following relationships between S and the other variables in the model:
+
+* S to directly influence A --> Because of strong religious beliefs, I assume that people in the Southern states are more likely to marry at a younger age (premarital chastity, conservative views of relationships)
+* S to directly influence D --> Similarly, it seems possible that people are quicker to choose marriage (regardless of their age) because it is seen as the right form of relationship for them. As a result, couples have not really tested their compatibility when they enter into marriage and are therefore more likely to divorce at some point. This effect may also work in the opposite direction, where religious beliefs prevent a couple from getting divorced.
+
+Those two relationships are shown in the following DAG:
+
+```{r}
+
+# Specifying DAG function and coordinates:
+gg_dag <- function(d) {
+  
+  d %>% 
+    ggplot(aes(x = x, y = y, xend = xend, yend = yend)) +
+    geom_dag_point(color = "firebrick", alpha = 1/4, size = 10) +
+    geom_dag_text(color = "firebrick") +
+    geom_dag_edges(edge_color = "firebrick") +
+    scale_x_continuous(NULL, breaks = NULL, expand = c(.1, .1)) +
+    scale_y_continuous(NULL, breaks = NULL, expand = c(.1, .1)) +
+    theme_plots() +
+    theme(panel.grid = element_blank())
+  
+}
+
+dag_coords <-
+  tibble(name = c("A", "M", "S", "D"),
+         x    = c(0.5, 0.5, 1.5, 2),
+         y    = c(1.5, 0.5, 2, 1))
+
+# Making the DAG:
+dag1 <-
+  dagify(A ~ S,
+         D ~ S,
+         coords = dag_coords) %>%
+  gg_dag()
+
+dag1
+```
+
+Supplementing the DAG with the relationships investigated in the Chapter by McElreath leads to the following more comprehensive DAG:
+
+```{r}
+dag2 <-
+  dagify(M ~ A,
+         A ~ S,
+         D ~ A + M + S,
+         coords = dag_coords) %>%
+  gg_dag()
+
+dag2
+```
+
+### Part 3: Regression analysis
+
+To investigate if the DAGs drawn in the previous section have relevance, I will use three regressions. First, I will estimate two simple bivariate models to see if S exerts a direct influence on A and D (compare dag1). Then, in the second step, I will estimate a multiple linear regression (MLR) reflecting dag2 to see what effects remain/occur when the model simultaneously knows the other variables in the model.
+
+#### Bivariate regression models
+
+#### Model 1: Bivariate S --> A
+
+Simple bivariate model with the state type index (S) as a predictor for median age at marriage (A):
+
+$\text{A}_i\sim \operatorname{Normal}(\mu_i, \sigma)$  
+$\mu_i= \alpha_{\text{S}[i]}$  
+$\alpha_j \sim \operatorname{Normal}(0, 0.5) \qquad \text{for } j = 1 \; \& \; 2$  
+$\sigma \sim \operatorname{Exponential}(1),$  
+
+```{r, results="hide"}
+fit_biv_A <- 
+  brm(data = d, 
+      family = gaussian,
+      A ~ 0 + S,
+      prior = c(prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      file = "fits/fit_biv_A")
+```
+
+```{r}
+# plot(fit_biv_A)
+
+summary(fit_biv_A)
+```
+
+#### Model 2: Bivariate S --> D
+
+Simple bivariate model with the state type index (S) as a predictor for divorce rate (D):
+
+$\text{D}_i\sim \operatorname{Normal}(\mu_i, \sigma)$  
+$\mu_i= \alpha_{\text{S}[i]}$  
+$\alpha_j \sim \operatorname{Normal}(0, 0.5) \qquad \text{for } j = 1 \; \& \; 2$  
+$\sigma \sim \operatorname{Exponential}(1),$  
+
+```{r, results="hide"}
+fit_biv_D <- 
+  brm(data = d, 
+      family = gaussian,
+      D ~ 0 + S,
+      prior = c(prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      file = "fits/fit_biv_D")
+```
+
+```{r}
+# plot(fit_biv_D)
+
+summary(fit_biv_D)
+```
+
+
+After having estimated the two bivariate regression we are now able to plot the coefficients with 95% credible intervals:
+
+```{r}
+# Specify function for coefficient plot
+coef_plot <- function(post) {
+  
+post %>% 
+  select(starts_with("b")) %>% 
+  set_names(distinct(d, S) %>% arrange(S) %>% pull()) %>% 
+  pivot_longer(everything()) %>% 
+  
+  ggplot(aes(x = value, y = name)) +
+  geom_vline(xintercept = 0, color = "firebrick4", alpha = 0.2) +
+  stat_pointinterval(point_interval = mode_hdi, .width = .95, 
+                     size = 2, color = "firebrick4", alpha = 0.6) +
+  labs(x = "expected effect (std)", 
+       y = NULL) +
+  theme_plots() +
+  theme(axis.text.y = element_text(hjust = 0),
+        axis.ticks.y = element_blank(),
+        panel.grid = element_blank())
+  
+}
+
+# Plot coefficients for bivariate regression S --> A
+post_biv_A <- posterior_samples(fit_biv_A) %>% 
+  coef_plot()
+
+post_biv_A
+```
+
+In this plot above we see the effects when state type is used to predict median age at marriage. According to the model, people marry at a younger age in the Southern states as compared to the non-Southern states. This estimate would be in line with the above hypothesized role of religious believes in the Southern states.  Yet, the difference between the two groups remains relatively mild with an overlap in the range between approx. -0.15 and 0.05 SD.
+
+```{r}
+# Plot coefficients for bivariate regression S --> D
+post_biv_D <- posterior_samples(fit_biv_D) %>% 
+  coef_plot()
+
+post_biv_D
+```
+
+In this second plot, we see the expected effects of using state type to predict divorce rates. According to the model, people in Southern states are more likely to divorce than those in non-Southern states. Given the hypothesized countervailing effects of religious beliefs on divorce rates, the relatively large difference between the two groups is surprising, suggesting that the hypothesized reasoning does not correspond to reality.
+
+#### Multiple linear regression (MLR)
+
+#### Model 3: MLR M, A, S --> D
+
+To examine the three predictors of marriage rate, median age at marriage, and state type on divorce rate together, I use an MLR analysis. Since the index variable S only contains two groups, I simply extend the linear model used in the book by including it. This way the model computes one coefficient for the Southern states group which can be interpreted as the divergence to the non-Southern states as the second group (NOTE: I was not completely sure about this and how to best include S into the MLR model).
+
+The model I use has the following specification:
+
+$\text{D}_i\sim \operatorname{Normal}(\mu_i, \sigma)$  
+$\mu_i= \alpha + \beta_1 \text{M}_i + \beta_2 \text{A}_i + \beta_3 \text{S}_i$   
+$\alpha  \sim \operatorname{Normal}(0, 0.2)$  
+$\beta_1 \sim \operatorname{Normal}(0, 0.5)$   
+$\beta_2 \sim \operatorname{Normal}(0, 0.5)$   
+$\beta_3 \sim \operatorname{Normal}(0, 0.5)$  
+$\sigma \sim \operatorname{Exponential}(1),$   
+
+```{r, results="hide"}
+fit_mlr <- 
+  brm(data = d, 
+      family = gaussian,
+      D ~ 1 + M + A + S,
+      prior = c(prior(normal(0, 0.2), class = Intercept),
+                prior(normal(0, 0.5), class = b),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      seed = 5,
+      file = "fits/fit_mlr")
+
+fit_mlr_lmf <- lm(D ~ 1 + M + A + S, data = d) # lm model for comparison of results
+```
+
+```{r}
+# plot(fit_mlr)
+
+summary(fit_mlr)
+
+summary(fit_mlr_lmf) # lm model for comparison of results
+```
+
+To check the models Implied predictions against the data that we have I construct a posterior prediction plot:
+
+```{r}
+fitted(fit_mlr) %>%
+  data.frame() %>%
+  mutate_all(~. * sd(d$Divorce) + mean(d$Divorce)) %>% 
+  bind_cols(d) %>%
+  
+  ggplot(aes(x = Divorce, y = Estimate)) +
+  geom_abline(linetype = 2, color = "grey50", size = .5) +
+  geom_point(size = 1.5, color = "firebrick4", alpha = 3/4) +
+  geom_linerange(aes(ymin = Q2.5, ymax = Q97.5),
+                 size = 1/4, color = "firebrick4") +
+  geom_text(data = . %>% filter(Loc %in% c("ID", "UT", "RI", "ME")),
+            aes(label = Loc), 
+            hjust = 1, nudge_x = - 0.25) +
+  labs(x = "Observed divorce", y = "Predicted divorce") +
+  theme_plots() +
+  theme(panel.grid = element_blank())
+```
+  
+Like in the book chapter the logically occurring under-predictions for states with very high divorce rates and the over-predictions for states with very low divorce rates resulting from the regressions divergence towards the mean remain. Yet, it appears as if some of the predictions are slightly less further away from the mean after the inclusion of S (e. g. mean prediction for Idaho now below 12%).
+
+Similar to the previous regressions, we can also display the coefficients of the MLR in a plot:
+
+```{r}
+post_mlr <- posterior_samples(fit_mlr)
+
+color_scheme_set("red")
+
+post_mlr %>% 
+  select(b_M:b_SSouthernstate) %>% 
+  mcmc_intervals(prob = .5,
+                 point_est = "median") +
+  theme_plots() +
+  theme(axis.text.y = element_text(hjust = 0),
+        axis.ticks.y = element_blank(),
+        panel.grid = element_blank())
+```
+
+The results show us that the coefficients for the two predictors marriage rate and median age at marriage remain relatively unchanged when we compare them with the results from the book chapter in which state type was not considered. For the newly included state type, on the other hand, we observe that divorce rates are relatively higher in Southern states than in non-Southern states (also when the model knows about the other two variables). The model estimate a positive deviation of 0.36 SD with 95% credible intervals [-0.11, 0.82] for Southern states as compared to the rates in non-Southern states.
+
+Returning to the initial ideas presented in the second DAG, these results are frankly difficult to explain by religious beliefs alone. One could argue that earlier marriage in a relationship is not exclusive to younger people in the South and therefore more people are divorced later. However, the estimate seems so large that there are likely more unobserved effects associated with state type.
+
+```{r}
+toolik_richness <- read.csv("toolik_richness.csv")
+
+options(mc.cores = parallel::detectCores())
+stan_glm_brms <- brm(bf(Richness ~ I(Year-2007),
+                      family = brmsfamily('poisson')), data = toolik_richness,
+                   iter = 1000,
+                   chains = 4, cores = 4)
+
+summary(stan_glm_brms)
+plot(stan_glm_brms)
+```
+

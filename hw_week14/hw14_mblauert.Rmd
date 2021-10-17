@@ -1,0 +1,314 @@
+---
+title: 'Homework ASM (SoSe 2021) -- Week 14'
+author: "Marc Blauert"
+date: "2021-07-12"
+output: 
+  html_document:
+    theme: default
+    highlight: haddock
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+```
+
+```{r packages, message=FALSE}
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(tidybayes)
+library(RColorBrewer)
+library(ggdist)
+library(hrbrthemes)
+```
+
+```{r plot_theme, include=FALSE}
+theme_plots <- function(){
+  theme_bw() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+**Task:**  
+Modify McElreath's model `m11.7` (UBCadmissions) to include a varying intercept for `dept`. Compare to models `m11.7`, `m11.8` and `m12.1`.
+
+# Data preparations
+
+## Loading the data
+
+```{r}
+data(UCBadmit, package = "rethinking")
+d <- UCBadmit
+rm(UCBadmit)
+```
+
+## Data wrangling
+
+```{r}
+d <- 
+  d %>%  
+  mutate(gid  = factor(applicant.gender, levels = c("male", "female")),
+         case = factor(1:n()))
+
+str(d)
+```
+
+# Model fitting
+
+## B11.7 (Binomial `gid` only)
+
+**Associated question:**  
+What are the average probabilities of admission for women and men *across all departments*?  
+
+\begin{align*}
+\text{admit}_i    & \sim \operatorname{Binomial}(n_i, p_i) \\
+\text{logit}(p_i) & = \alpha_{\text{gid}[i]} \\
+\alpha_j          & \sim \operatorname{Normal}(0, 1.5) \\
+\end{align*}
+
+```{r}
+b11.7 <-
+  brm(data = d, 
+      family = binomial,
+      admit | trials(applications) ~ 0 + gid,
+      prior(normal(0, 1.5), class = b),
+      iter = 2000, warmup = 1000, cores = 4, chains = 4,
+      file = "fits/b11.07")
+
+b11.7 <- add_criterion(b11.7, c("loo", "waic"))
+
+fixef(b11.7)
+```
+
+## B11.8 (Binomial `gid` + `dept`)
+
+**Associated question:**  
+What is the average difference in probability of admission between women and men *within departments*?
+
+\begin{align*}
+\text{admit}_i    & \sim \operatorname{Binomial} (n_i, p_i) \\
+\text{logit}(p_i) & = \alpha_{\text{gid}[i]} + \beta_{\text{dept}[i]} \\
+\alpha_j          & \sim \operatorname{Normal} (0, 1.5) \\
+\beta_k          & \sim \operatorname{Normal} (0, 1.5) \\
+\end{align*}
+
+```{r}
+b11.8 <-
+  brm(data = d, 
+      family = binomial,
+      admit | trials(applications) ~ 0 + gid + dept,
+      prior(normal(0, 1.5), class = b),
+      iter = 2000, warmup = 1000, cores = 4, chains = 4,
+      file = "fits/b11.08")
+
+b11.8 <- add_criterion(b11.8, c("loo", "waic"))
+
+fixef(b11.8)
+```
+
+## B12.1 (Beta-binomial `gid`)
+
+The beta-binomial model must be custom implemented in brms.
+
+### Define custom likelihood
+
+*"The beta-binomial model is not yet implemented in brms. Thus, in order to fit a beta-binomial model like m12.1 in the exercise, we have to define a custom likelihood (i.e. familiy), as shown in the brms vignette “Define Custom Response Distributions with brms”, which covers the beta-binomial model as an example: https://cran.r-project.org/web/packages/brms/vignettes/brms_customfamilies.html"*
+
+(Code taken from provided html-document.)
+
+```{r}
+beta_binomial2 <- custom_family(
+  "beta_binomial2", dpars = c("mu", "phi"),
+  links = c("logit", "log"), lb = c(NA, 2), # Adj.: Lower bound set to two to integrate that every probability between 0 and 1 is equally likely
+  type = "int", vars = "vint1[n]"
+)
+
+stan_funs <- "
+  real beta_binomial2_lpmf(int y, real mu, real phi, int T) {
+    return beta_binomial_lpmf(y | T, mu * phi, (1 - mu) * phi);
+  }
+  int beta_binomial2_rng(real mu, real phi, int T) {
+    return beta_binomial_rng(T, mu * phi, (1 - mu) * phi);
+  }
+"
+stanvars <- stanvar(scode = stan_funs, block = "functions")
+```
+
+### Fit model
+
+**Associated question:**  
+What are the average probabilities of admission for women and men *across all departments*, while assuming that *each department has its own unique and unobserved probability of admission*?  
+
+\begin{align*}
+\text{admit}_i &\sim \operatorname{BetaBinomial} (n_i, \bar p_i, \phi) \\
+\text{logit}(\bar p_i) &= \alpha_{\text{gid}[i]} \\
+\alpha_j &\sim \operatorname{Normal}(0, 1.5) \\
+\phi &\sim \operatorname{Exponential}(1)\\
+\end{align*}
+
+```{r}
+b12.1 <-
+  brm(data = d, 
+      family = beta_binomial2,
+      admit | vint(applications) ~ 0 + gid,
+      prior = c(prior(normal(0, 1.5), class = b),
+                prior(exponential(1), class = phi)),
+      stanvars = stanvars,
+      iter = 2000, warmup = 1000, cores = 4, chains = 4,
+      file = "fits/b12.01")
+
+summary(b12.1)
+```
+
+The difference between the two gender coefficients is smaller than in `b11.7`, which is the result of the underlying beta-binomial distribution assumption. Yet, as a logical consequence of allowing for more variation, the credible intervals and the associated estimated error are far larger than in `b11.7`. Furthermore, the regression summary shows that the defined lower limit for `phi` of 2 is adhered to.
+
+### Obtain `WAIC` and `LOO`
+
+Also taken from additionally provided html-document on the custom defined beta-binomial distribution.
+
+*"Unfortunately, using a custom distribution means that we can’t easily let STAN compute the ELPD for us, so we have to do it manually in R, using the samples from the model fit. This is also explained in the vignette mentioned above. (However, there is a little mistake: The second parameter in the function definition must be called draws and not prep.)"*
+
+```{r, results=FALSE}
+expose_functions(b12.1, vectorize = TRUE)
+
+log_lik_beta_binomial2 <- function(i, draws) {
+  mu <- draws$dpars$mu[, i]
+  phi <- draws$dpars$phi
+  trials <- draws$data$vint1[i]
+  y <- draws$data$Y[i]
+  beta_binomial2_lpmf(y, mu, phi, trials)
+}
+
+b12.1 <- add_criterion(b12.1, c("loo", "waic"))
+```
+
+## B13.2 (Binomial `gid` + varying intercepts `dept`)
+
+**Associated question:**  
+What is the average difference in probability of admission between women and men if *intercepts are allowed to vary across departments?*  
+
+(NOTE: To me, the associated question that I came up with appears congruent with that of model `B12.1`, only this time implemented differently.)
+
+\begin{align*}
+\text{admit}_i    & \sim \operatorname{Binomial} (n_i, p_i) \\
+\text{logit}(p_i) & = \alpha_{\text{gid}[i]} + \beta_{\text{dept}[i]} \\
+\alpha_j          & \sim \operatorname{Normal} (0, 1.5) \\
+\beta_{\text{dept}[i]} & \sim \operatorname{Normal} (\beta, \sigma) \\
+\beta         & \sim \operatorname{Normal} (0, 1.5) \\
+\sigma         & \sim \operatorname{Exponential} (1) \\
+\end{align*}
+
+```{r}
+b13.2 <-
+  brm(data = d, 
+      family = binomial,
+      admit | trials(applications) ~ 0 + gid + (1 |dept),
+      prior = c(prior(normal(0, 1.5), class = b),
+                prior(exponential(1), class = sd)),
+      iter = 2000, warmup = 1000, cores = 4, chains = 4,
+      file = "fits/b13.02")
+
+b13.2 <- add_criterion(b13.2, c("loo", "waic"))
+
+posterior_summary(b13.2) # shows that varying intercepts were created
+
+fixef(b13.2)
+```
+
+# Model comparison
+
+## Based on LOO
+
+```{r}
+loo_compare(b11.7, b11.8, b12.1, b13.2, criterion = "loo") %>% print(simplify = T)
+```
+
+Comparing the fit of the four models estimated in the previous section, it is clear that the two models containing the variable `dept` have the best fit. By far the worst fit is found for `b11.7`, which considers only `gid` as a single predictor. The model `b12.1` also contains only `gid`, but allows for much more variation due to the use of the beta-binomial distribution. Therefore, its fit is found to be only a little worse than the fit of the two models that explicitly include `dept`.
+
+Between `b11.8` and `b13.2` (the two models that include `dept`) there is no clear evidence which has the highest predictive power. While the simple model ranks highest, the `se_diff` of the varying intercept model is greater than its `elpd_diff` to the first model. Thus, the varying intercept model may still be the better fitting model.
+
+## Visual evidence
+
+Those findings are visually reflected in the posterior predictive check plots. Please note that the special case `b12.1` is omitted here.
+
+```{r, message=FALSE}
+pp_check_b11.7 <- pp_check(b11.7) + labs(subtitle = "B11.7") + scale_color_brewer(palette = "Dark2") + legend_none()
+pp_check_b11.8 <- pp_check(b11.8) + labs(subtitle = "B11.8") + scale_color_brewer(palette = "Dark2") + legend_none()
+#pp_check_b12.1 <- pp_check(b12.1) + labs(subtitle = "B12.1") + scale_color_brewer(palette = "Dark2") + legend_none()
+pp_check_b13.2 <- pp_check(b13.2) + labs(subtitle = "B13.2") + scale_color_brewer(palette = "Dark2") + legend_none()
+
+bayesplot_grid(pp_check_b11.7, pp_check_b11.8, pp_check_b13.2,
+               grid_args = list(ncol = 1))
+```
+
+# Differences (in `gid`)
+
+In the following section, the differences in admission rates between men and women will be presented to complement the previous model comparison.
+
+## Create and bind posterior differences
+
+```{r}
+post_b11.7 <- posterior_samples(b11.7) %>%
+  mutate(diff_p_b11.7 = inv_logit_scaled(b_gidmale) - inv_logit_scaled(b_gidfemale)) %>% 
+  dplyr::select(diff_p_b11.7) %>% 
+  pivot_longer(diff_p_b11.7)
+
+post_b11.8 <- posterior_samples(b11.8) %>%
+  mutate(diff_p_b11.8 = inv_logit_scaled(b_gidmale) - inv_logit_scaled(b_gidfemale)) %>% 
+  dplyr::select(diff_p_b11.8) %>% 
+  pivot_longer(diff_p_b11.8)
+
+post_b12.1 <- posterior_samples(b12.1) %>%
+  mutate(diff_p_b12.1 = inv_logit_scaled(b_gidmale) - inv_logit_scaled(b_gidfemale)) %>% 
+  dplyr::select(diff_p_b12.1) %>% 
+  pivot_longer(diff_p_b12.1)
+
+post_b13.2 <- posterior_samples(b13.2) %>%
+  mutate(diff_p_b13.2 = inv_logit_scaled(b_gidmale) - inv_logit_scaled(b_gidfemale)) %>% 
+  dplyr::select(diff_p_b13.2) %>% 
+  pivot_longer(diff_p_b13.2)
+
+summary(post_b13.2$value) # summary of differences for model b13.2
+
+post_differences <- bind_rows(post_b11.7, post_b11.8, post_b12.1, post_b13.2) %>% 
+  rename(Model = name) %>% 
+  mutate_if(is.character,as.factor)
+  
+# levels(post_differences$Model)
+
+levels(post_differences$Model) <- c("B11.7", "B11.8", "B12.1", "B13.2")
+
+str(post_differences)
+```
+
+## Plot posterior differences
+
+```{r}
+ggplot(post_differences, aes(x = value, y = Model, fill = Model)) +
+  stat_eye(alpha = 0.5) +
+  scale_x_continuous(limits = c(-0.5, 0.5)) +
+  scale_fill_brewer(palette = "Dark2") +
+  geom_vline(xintercept = 0, color = "red", linetype = 2) +
+  theme_ipsum() +
+  labs(subtitle = "Posterior differences for admission of men and women (linear scale)", x = "Difference in probability", y = "") +
+  guides(fill = guide_legend(reverse = TRUE))
+```
+
+In the plot above, a positive difference from zero indicates a higher admission rate for men and a negative difference from zero indicates a higher admission rate for women. One can see very clearly the conceptual differences between the models in this plot. Importantly, only the simplest and worst fitting model `B11.7` (without the predictor `dept` or the beta-binomial distribution assumption) suggests that women have a lower admission rate. The best fitting models `B11.8` and `B13.2` have a very similar shape and both indicate a slightly higher admission rate for women than for men. `B12.1` has a similar point estimate as `B11.8` and `B13.2`, but the distribution is much wider than the other models, which assume a binomial rather than a beta-binomial distribution.

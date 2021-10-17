@@ -1,0 +1,311 @@
+---
+title: 'Homework ASM (SoSe 2021) -- Week 13'
+author: "Marc Blauert"
+date: "2021-07-09"
+output: 
+  html_document:
+    theme: default
+    highlight: haddock
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(tidybayes)
+library(RColorBrewer)
+library(MASS)
+library(rethinking)
+library(patchwork)
+library(hrbrthemes)
+```
+
+```{r, include=FALSE}
+theme_plots <- function(){
+  theme_bw() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+Tasks: McElreath Ch. 14.7, Ex. 14E1, 14M1-2
+
+# 14E1
+
+Add to the following model (initial model) varying slopes on the predictor x (adjusted model).
+
+## Initial model
+
+\begin{align*}
+y_i &\sim {\sf Normal}(\mu_i, \sigma) \\
+\mu_i &= \alpha_{\text{GROUP[i]}} + \beta x_i \\
+\alpha_{\text{j}} &\sim {\sf Normal}(\alpha, \sigma_{\alpha}) \\
+\alpha &\sim {\sf Normal}(0, 10) \\
+\beta &\sim {\sf Normal}(0, 1) \\
+\sigma, \sigma_{\alpha} &\sim {\sf Exponential}(1) \\
+\end{align*}
+
+## Adjusted model
+
+\begin{align*}
+y_i &\sim {\sf Normal}(\mu_i, \sigma) \\
+\mu_i & = \alpha_{\text{GROUP}[i]} + \beta_{\text{GROUP}[i]} x_i \\
+\alpha_{\text{j}} &\sim {\sf Normal}(\alpha, \sigma_{\alpha}) \\
+\beta_{\text{j}} &\sim {\sf Normal}(\beta, \sigma_{\beta}) \\
+\alpha &\sim {\sf Normal}(0, 10) \\
+\beta &\sim {\sf Normal}(0, 1) \\
+\sigma, \sigma_{\alpha}, \sigma_{\beta} &\sim {\sf Exponential}(1) \\
+\end{align*}
+
+# 14M1
+
+Repeat the café robot simulation from the beginning of the chapter.This time, set `rho` to zero, so that there is no correlation between intercepts and slopes. How does the posterior distribution of the correlation reflect this change in the underlying simulation?
+
+## Simulate varying slopes and intercepts
+
+```{r}
+# Note: Simulation copied from Section 14.1 in the brms bookdown
+
+set.seed(5) # to replicate example
+
+a <- 3.5 # average morning wait time
+b <- -1 # average difference afternoon wait time
+sigma_a <- 1 # std dev in intercepts
+sigma_b <- 0.5 # std dev in slopes
+mu <- c(a, b)
+
+# IMPORTANT: Here we make the change to zero correlation
+rho <- 0 # correlation between intercepts and slopes as zero
+
+sigmas <- c(sigma_a, sigma_b) # standard deviations
+rho <- matrix(c(1, rho,             
+                rho, 1), nrow = 2) # correlation matrix
+sigma <- diag(sigmas) %*% rho %*% diag(sigmas) # matrix multiply to get covariance matrix
+
+n_cafes <- 20 # number of cafés
+
+vary_effects <- 
+  mvrnorm(n_cafes, mu, sigma) %>% 
+  data.frame() %>% 
+  set_names("a_cafe", "b_cafe") # df with a_cafe as café-specific intercepts; and b_cafe as café-specific slopes
+
+cor(vary_effects$a_cafe, vary_effects$b_cafe)
+```
+
+The correlation coefficient at the end of the code section shows that the varying intercepts and the varying slopes are now merely uncorrelated. The fact that the correlation does not quite approach zero is only due to the relatively small number of cafés in the sample. With a larger number of cafés, the correlation would be closer to zero.
+
+## Simulate the actual data
+
+```{r}
+set.seed(22) # for replication
+
+n_visits <- 10
+sigma    <-  0.5  # std dev within cafes
+
+d <-
+  vary_effects %>% 
+  mutate(cafe = 1:n_cafes) %>% 
+  expand(nesting(cafe, a_cafe, b_cafe), visit = 1:n_visits) %>% 
+  mutate(afternoon = rep(0:1, times = n() / 2)) %>% 
+  mutate(mu = a_cafe + b_cafe * afternoon) %>% 
+  mutate(wait = rnorm(n = n(), mean = mu, sd = sigma)) # 20 cafés with 10 visits each
+
+str(d)
+```
+
+## Fit the model
+
+\begin{align*}
+\text{wait}_i & \sim \operatorname{Normal}(\mu_i, \sigma) \\
+\mu_i         & = \alpha_{\text{café}[i]} + \beta_{\text{café}[i]} \text{afternoon}_i \\
+\begin{bmatrix} \alpha_\text{j} \\ \beta_\text{j} \end{bmatrix} & \sim \operatorname{MVNormal} \begin{pmatrix} \begin{bmatrix} \alpha \\ \beta \end{bmatrix}, \mathbf \Sigma \end{pmatrix} \\
+\mathbf \Sigma     & = \begin{bmatrix} \sigma_\alpha & 0 \\ 0 & \sigma_\beta \end{bmatrix} \mathbf R \begin{bmatrix} \sigma_\alpha & 0 \\ 0 & \sigma_\beta \end{bmatrix} \\
+\alpha        & \sim \operatorname{Normal}(5, 2) \\
+\beta         & \sim \operatorname{Normal}(-1, 0.5) \\
+\sigma, \sigma_\alpha, \sigma_\beta        & \sim \operatorname{Exponential}(1) \\
+\mathbf R     & \sim \operatorname{LKJcorr}(2),
+\end{align*}
+
+(Note: Here I used the alpha_j and beta_j again; not entirely sure if this is the formally correct way to write it. In the bookdown, alpha_café and beta_café was used. But possibly it was only wrongly copied from McElreth's book.)
+
+```{r}
+b14.1 <- 
+  brm(data = d, 
+      family = gaussian,
+      wait ~ 1 + afternoon + (1 + afternoon | cafe),
+      prior = c(prior(normal(5, 2), class = Intercept),
+                prior(normal(-1, 0.5), class = b),
+                prior(exponential(1), class = sd),
+                prior(exponential(1), class = sigma),
+                prior(lkj(2), class = cor)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      file = "fits/b14.01")
+
+summary(b14.1)
+```
+
+## Plot the posterior distribution of correlation between intercepts and slopes
+
+```{r}
+post <- posterior_samples(b14.1)
+
+pal <- brewer.pal(1, "Accent")
+print(pal)
+pal_one <- "#7FC97F"
+
+post %>%
+  ggplot(aes(x = cor_cafe__Intercept__afternoon)) +
+  geom_density(fill = pal_one, alpha = 0.5, color = "black") +
+  geom_vline(xintercept = 0, color = "red") +
+  theme_ipsum() +
+  labs(subtitle = "Posterior distribution of correlation between intercepts and slopes",
+  x = "Correlation", y = "Density")
+
+?ipsum_pal
+```
+
+The graph shows that the posterior correlation distribution is centered around zero and that the sampling reflects the previously estimated correlation coefficient close to zero. As mentioned previously, using a larger number of cafés would result in the residual difference to decrease even more.
+
+# 14M2
+
+Fit a multilevel model (with no multivariate correlation between intercept and slope) to the simulated café data and use LOO (WAIC) to compare this model to the model from the chapter (the one that uses a multivariate Gaussian prior). Explain the result.
+
+```{r, include=FALSE}
+rm(list = ls())
+
+theme_plots <- function(){
+  theme_bw() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+## Re-simulate data with varying intercepts and slopes
+
+```{r}
+set.seed(5)
+
+a <- 3.5
+b <- -1
+sigma_a <- 1
+sigma_b <- 0.5
+mu <- c(a, b)
+
+rho <- -0.7 # IMPORTANT: Here we make the change back to a correlation of -0.7
+
+sigmas <- c(sigma_a, sigma_b)
+rho <- matrix(c(1, rho,             
+                rho, 1), nrow = 2) 
+sigma <- diag(sigmas) %*% rho %*% diag(sigmas)
+
+n_cafes <- 20
+
+vary_effects <- 
+  mvrnorm(n_cafes, mu, sigma) %>% 
+  data.frame() %>% 
+  set_names("a_cafe", "b_cafe") 
+
+cor(vary_effects$a_cafe, vary_effects$b_cafe)
+
+set.seed(22)
+
+n_visits <- 10
+sigma <- 0.5
+
+d <-
+  vary_effects %>% 
+  mutate(cafe = 1:n_cafes) %>% 
+  expand(nesting(cafe, a_cafe, b_cafe), visit = 1:n_visits) %>% 
+  mutate(afternoon = rep(0:1, times = n() / 2)) %>% 
+  mutate(mu = a_cafe + b_cafe * afternoon) %>% 
+  mutate(wait = rnorm(n = n(), mean = mu, sd = sigma))
+
+str(d)
+```
+
+## Fit model with multivariate Gaussian prior (from chapter)
+
+(For model equation compare Section 2.3.)
+
+```{r}
+b14.2 <- 
+  brm(data = d, 
+      family = gaussian,
+      wait ~ 1 + afternoon + (1 + afternoon | cafe),
+      prior = c(prior(normal(5, 2), class = Intercept),
+                prior(normal(-1, 0.5), class = b),
+                prior(exponential(1), class = sd),
+                prior(exponential(1), class = sigma),
+                prior(lkj(2), class = cor)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      file = "fits/b14.02")
+
+summary(b14.2)
+```
+
+## Fit model with no multivariate Gaussian prior
+
+\begin{align*}
+\text{wait}_i &\sim {\sf Normal}(\mu_i, \sigma) \\
+\mu_i         & = \alpha_{\text{café}[i]} + \beta_{\text{café}[i]} \text{afternoon}_i \\
+\alpha_{\text{j}} &\sim {\sf Normal}(\alpha, \sigma_{\alpha}) \\
+\beta_{\text{j}} &\sim {\sf Normal}(\beta, \sigma_{\beta}) \\
+\alpha &\sim {\sf Normal}(0, 10) \\
+\beta &\sim {\sf Normal}(0, 10) \\
+\sigma, \sigma_{\alpha}, \sigma_{\beta} &\sim {\sf Exponential}(1) \\
+\end{align*}
+
+Hint provided: To model NO correlation between the group-level parameters, use "||" instead of "|" in front of the grouping variable (https://cran.r-project.org/web/packages/brms/vignettes/brms_multilevel.pdf).
+
+```{r}
+b14.3 <- 
+  brm(data = d, 
+      family = gaussian,
+      wait ~ 1 + afternoon + (1 + afternoon || cafe), # Prevent consideration of the correlation between intercept and slope
+      prior = c(prior(normal(0, 10), class = Intercept),
+                prior(normal(0, 10), class = b),
+                prior(exponential(1), class = sd),
+                prior(exponential(1), class = sigma)),
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      file = "fits/b14.03")
+
+summary(b14.3)
+```
+
+The results from the the two models with (`b14.2`) and without (`b14.3`) the multivariate Gaussian prior are largely the same. It is therefore to be expected that the model comparison rates the two models as more or less equally good in their predictive ability.
+
+## Model comparison
+
+```{r}
+b14.2 <- add_criterion(b14.2, c("loo", "waic"))
+b14.3 <- add_criterion(b14.3, c("loo", "waic"))
+
+loo_compare(b14.2, b14.3, criterion = "loo") %>% print(simplify = T) # use of LOO since with WAIC 23 observations have a pareto_k estimate larger than 0.4
+```
+
+The use of the LOO criterion to compare model fit verifies the assumption that there is no meaningfully better fit for the model `b14.2`, which takes into account the correlation between the intercept and the slope of the model and also has less narrow prior assumptions. However, the assumption that the waiting times between the two groups in the morning and in the afternoon in the same cafés are somewhat related seems intuitive to me and should therefore be retained in the model, if only to better represent the prior expectations about waiting time.

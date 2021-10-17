@@ -1,0 +1,245 @@
+---
+title: 'Homework ASM (SoSe 2021) -- Week 12'
+author: "Marc Blauert"
+date: "2021-06-28"
+output: 
+  html_document:
+    theme: default
+    highlight: haddock
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(dirname(rstudioapi::getSourceEditorContext()$path))
+
+rm(list = ls())
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+library(tidyverse)
+library(brms)
+library(bayesplot)
+library(tidybayes)
+library(RColorBrewer)
+library(MASS)
+library(rethinking)
+library(patchwork)
+library(ggridges)
+```
+
+```{r, include=FALSE}
+theme_plots <- function(){
+  theme_bw() +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),
+          axis.text.y = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          panel.grid = element_blank(),
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), units = , "cm"),
+          plot.title = element_text(size = 14, vjust = 1, hjust = 0.5),
+          legend.text = element_text(size = 12, face = "italic"),
+          legend.title = element_blank(),
+          legend.position = "right")
+}
+```
+
+Tasks: McElreath Ch. 13.7, Ex. 13E2-3, 13M1-2
+
+# 13E2
+
+## Initial model equation
+
+\begin{align*}
+y_i & \sim \operatorname{Binomial}(1, p_i) \\
+\operatorname{logit}(p_i) & = \alpha_{\text{group[i]}} + \beta x_i \\
+\alpha_{\text{group}}  & \sim \operatorname{Normal}(0, 1.5) \\
+\beta  & \sim \operatorname{Normal}(0, 0.5) \\  
+\end{align*}
+
+## As multilevel model  
+
+\begin{align*}
+y_i & \sim \operatorname{Binomial}(1, p_i) \\
+\operatorname{logit}(p_i) & = \alpha_{\text{group[i]}} + \beta x_i \\
+\alpha_j  & \sim \operatorname{Normal}({\bar \alpha}, {\sigma}) \\
+{\bar \alpha}  & \sim \operatorname{Normal}(0, 0.5) \\  
+{\sigma}  & \sim \operatorname{Exponential}(1) \\  
+\beta  & \sim \operatorname{Normal}(0, 0.5) \\
+\end{align*}
+
+# 13E3
+
+## Initial model equation
+
+\begin{align*}
+y_i & \sim \operatorname{Normal}(\mu_i, \sigma) \\
+\mu_i & = \alpha_{\text{group[i]}} + \beta x_i \\
+\alpha_{\text{group}}  & \sim \operatorname{Normal}(0, 0.5) \\
+\beta  & \sim \operatorname{Normal}(0, 1) \\  
+{\sigma}  & \sim \operatorname{Exponential}(1) \\  
+\end{align*}
+
+## As multilevel model  
+
+\begin{align*}
+y_i & \sim \operatorname{Normal}(\mu_i, \sigma) \\
+\mu_i & = \alpha_{\text{group[i]}} + \beta x_i \\
+\alpha_j  & \sim \operatorname{Normal}({\bar \alpha}, {\sigma}) \\
+{\bar \alpha}  & \sim \operatorname{Normal}(0, 0.5) \\  
+{\sigma}  & \sim \operatorname{Exponential}(1) \\  
+\beta  & \sim \operatorname{Normal}(0, 1) \\  
+\end{align*}
+
+(Note: Here, I was unsure on how to treat the sigma parameter; should it be specified independently for the varying intercept and the y_i equation?)
+
+# 13M1
+
+Revisit the Reed frog survival data, data(reedfrogs), and add the predation (pred) and size treatment variables to the varying intercepts model. Consider models with either main effect alone, both main effects, as well as a model including both and their interaction. Instead of focusing on inferences about these two predictor variables, focus on the inferred variation across tanks. Explain why it changes as it does across models.
+
+
+## Load data and add tak variable
+
+```{r}
+data(reedfrogs, package = "rethinking")
+d <- reedfrogs
+rm(reedfrogs)
+
+d <- 
+  d %>%
+  mutate(tank = 1:nrow(d))
+
+str(d) # note that pred is already a factor variable 
+```
+
+## Fitting the models, Part 1/2 (single predictors)
+
+```{r}
+pred_fit <- 
+  brm(data = d, 
+      family = binomial,
+      surv | trials(density) ~ pred + (1 | tank), # since pred is a factor variable with only two levels, I add it as a fixed effect variable (rule of thumb: use varying intercepts with >=5 categories)
+      prior = c(prior(normal(0, 1.5), class = Intercept),  # bar alpha
+                prior(exponential(1), class = sd),         # sigma
+                prior(normal(0, 0.5), class = b)),
+      iter = 5000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = T,
+      seed = 13,
+      file = "fits/pred_fit")
+
+size_fit <- 
+  brm(data = d, 
+      family = binomial,
+      surv | trials(density) ~ size + (1 | tank), # since also size is a factor variable with only two levels, I add it as a fixed effect variable
+      prior = c(prior(normal(0, 1.5), class = Intercept),  # bar alpha
+                prior(exponential(1), class = sd),         # sigma
+                prior(normal(0, 0.5), class = b)),
+      iter = 5000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = T,
+      seed = 13,
+      file = "fits/size_fit")
+
+#summary(pred_fit)
+#summary(size_fit)
+
+color_scheme_set("teal")
+
+pred_mcmc_plot <- mcmc_areas(pred_fit, pars = "sd_tank__Intercept", prob_outer = 0.9) +
+  labs(subtitle = "Predation model") +
+  panel_bg(fill = "gray95", color = NA) +
+  grid_lines(color = "white")
+  # for the task we focus on the inferred variation across tanks
+
+size_mcmc_plot <- mcmc_areas(size_fit, pars = "sd_tank__Intercept", prob_outer = 0.9) +
+  labs(subtitle = "Size model") +
+  panel_bg(fill = "gray95", color = NA) +
+  grid_lines(color = "white")
+```
+
+## Fitting the models, Part 2/2 (both predictors and interaction)
+
+```{r}
+both_fit <- 
+  brm(data = d, 
+      family = binomial,
+      surv | trials(density) ~ pred + size + (1 | tank), # now with both variables
+      prior = c(prior(normal(0, 1.5), class = Intercept),  # bar alpha
+                prior(exponential(1), class = sd),         # sigma
+                prior(normal(0, 0.5), class = b)),
+      iter = 5000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = T,
+      seed = 13,
+      file = "fits/both_fit")
+
+interaction_fit <- 
+  brm(data = d, 
+      family = binomial,
+      surv | trials(density) ~ pred * size + (1 | tank), # multiplication induces both variables plus interaction term
+      prior = c(prior(normal(0, 1.5), class = Intercept),  # bar alpha
+                prior(exponential(1), class = sd),         # sigma
+                prior(normal(0, 0.5), class = b)),
+      iter = 5000, warmup = 1000, chains = 4, cores = 4,
+      sample_prior = T,
+      seed = 13,
+      file = "fits/interaction_fit")
+
+#summary(both_fit)
+#summary(interaction_fit)
+
+both_mcmc_plot <- mcmc_areas(both_fit, pars = "sd_tank__Intercept", prob_outer = 0.9) +
+  labs(subtitle = "Predation & size model") +
+  panel_bg(fill = "gray95", color = NA) +
+  grid_lines(color = "white")
+
+interaction_mcmc_plot <- mcmc_areas(interaction_fit, pars = "sd_tank__Intercept", prob_outer = 0.9) +
+  labs(subtitle = "Predation & size model \nwith interaction") +
+  panel_bg(fill = "gray95", color = NA) +
+  grid_lines(color = "white")
+
+bayesplot_grid(pred_mcmc_plot, size_mcmc_plot, both_mcmc_plot, interaction_mcmc_plot,
+               xlim = c(0.5, 2), 
+               grid_args = list(ncol = 2))
+
+
+# Alternative option to display posterior distribution plots with ggplots geom_density_ridges
+
+#post <- posterior_samples(interaction_fit) %>% 
+#  dplyr::select(b_Intercept:sd_tank__Intercept) %>% 
+#  gather() %>% 
+#  mutate_if(is.character,as.factor)
+  
+#str(post)
+
+#ggplot(post, aes(x = value, y = key, fill = key)) +
+#  geom_density_ridges2() +
+#  scale_fill_brewer(palette = 4) +
+#  theme_ridges() + theme(legend.position = "none")
+```
+
+The models with the individual predictors (top row of the diagram) show unequal variation attributed to the tank variable. The variation is higher in the model with size only as compared to the model with predation only. The models with both predictors and the interaction term (bottom row of the graph) more closely mirror the results of the predation model from the first row, with less variation attributed to the tanks. 
+
+# 13M2
+
+Compare the models you fit just above, using WAIC. Can you reconcile the differences in WAIC with the posterior distributions of the models?
+
+## Obtain the WAIC and LOO criteria for the models
+
+```{r}
+pred_fit <- add_criterion(pred_fit, c("loo", "waic"))
+size_fit <- add_criterion(size_fit, c("loo", "waic"))
+both_fit <- add_criterion(both_fit, c("loo", "waic"))
+interaction_fit <- add_criterion(interaction_fit, c("loo", "waic"))
+```
+
+## Model comparison (using LOO)
+
+```{r}
+loo_compare(pred_fit, size_fit, both_fit, interaction_fit, criterion = "loo") %>% print(simplify = T)
+```
+
+Since with WAIC many observations have a pareto_k estimate larger than 0.7, I decide to use the LOO rather than the WAIC criterion for the purpose of model comparison. The model comparison reflects the findings shown in the area plots above. All models with `pred` included show very similar overall model performance. The `size_fit` model is the only one that shows inferior predictive performance as compared to the other three.
+
+
+
